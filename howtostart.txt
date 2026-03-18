@@ -1,0 +1,10 @@
+run ./boot_qemu.sh
+then with new terminal window connect with ssh 
+ssh -p 2222 -i ~/.ssh/id_ed25519 ubuntu@localhost
+then must each time kernel bypass:
+
+cd spdk
+sudo modprobe uio_pci_generic
+sudo HUGEMEM=2048 ./scripts/setup.sh
+
+

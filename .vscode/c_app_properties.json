@@ -1,0 +1,18 @@
+{
+    "configurations": [
+        {
+            "name": "Linux-NVMe",
+            "includePath": [
+                "${workspaceFolder}/**",
+                "${workspaceFolder}/spdk/include/**",
+                "${workspaceFolder}/spdk/dpdk/build/include/**"
+            ],
+            "defines": [],
+            "compilerPath": "/usr/bin/g++",
+            "cStandard": "c11",
+            "cppStandard": "c++17",
+            "intelliSenseMode": "linux-gcc-x64"
+        }
+    ],
+    "version": 4
+}

@@ -1,0 +1,7 @@
+#cloud-config
+users:
+  - name: ubuntu
+    ssh-authorized-keys:
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDFuMNajH1FCSjrO3YYlxDpWnMUhHc6B+9KfON21fgZc ofek-yankis@ofek-yankis-VMware-Virtual-Platform
+    sudo: ALL=NOPASSWD:ALL
+    groups: sudo
