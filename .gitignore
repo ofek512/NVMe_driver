@@ -1,0 +1,14 @@
+# Virtual Machine Infrastructure
+*.img
+*.qcow2
+*.iso
+
+# Compiled Frameworks
+spdk/
+
+# C++ Build Artifacts
+*.o
+*.so
+*.a
+build/
+bin/
