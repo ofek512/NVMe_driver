@@ -7,8 +7,18 @@ extern "C" {
 }
 #include <iostream>
 #include <vector>
+#include <cstdint>
 
-static std::vector<struct spdk_nvme_ctrlr *> g_controllers;
+struct NvmeDevice {
+    struct spdk_nvme_ctrlr *ctrlr;
+    struct spdk_nvme_ns    *ns;
+    struct spdk_nvme_qpair *qpair;    // Mission B: I/O queue pair
+    void                   *dma_buf;  // Mission C: DMA-safe buffer
+    uint32_t                sector_size;
+    uint64_t                total_sectors;
+};
+
+static std::vector<NvmeDevice> g_devices;
 
 //Find the NVMe on PCIe bus with callback function
 bool probe_cb(void *cb_ctx, const struct spdk_nvme_transport_id *trid, struct spdk_nvme_ctrlr_opts *opts){
@@ -19,7 +29,9 @@ bool probe_cb(void *cb_ctx, const struct spdk_nvme_transport_id *trid, struct sp
 // Callback fires after claiming the device — store controller for cleanup
 void attach_cb(void *cb_ctx, const struct spdk_nvme_transport_id *trid, struct spdk_nvme_ctrlr *ctrlr, const struct spdk_nvme_ctrlr_opts *opts) {
     std::cout << "SUCCESS: Exclusive hardware control established at " << trid->traddr << std::endl;
-    g_controllers.push_back(ctrlr);
+    NvmeDevice dev = {};
+    dev.ctrlr = ctrlr;
+    g_devices.push_back(dev);
 }
 
 int main() {
@@ -46,11 +58,33 @@ int main() {
         return -1;
     }
 
+    // Call ctrlr_get_data() to see the model and serial and get namespace 1 with nvme_ctrlr_get_ns() to verify we have access to the device
+    for (auto &dev : g_devices) {
+        const struct spdk_nvme_ctrlr_data *data;
+        data = spdk_nvme_ctrlr_get_data(dev.ctrlr);
+        cout << "Model number: " << string((char *)data->mn, sizeof(data->mn))
+             << ", Serial number: " << string((char *)data->sn, sizeof(data->sn)) << endl;
+
+        dev.ns = spdk_nvme_ctrlr_get_ns(dev.ctrlr, 1);
+        if (dev.ns == nullptr || !spdk_nvme_ns_is_active(dev.ns)) {
+            cerr << "ERROR: Namespace 1 not active on controller" << endl;
+            spdk_nvme_detach(dev.ctrlr);
+            spdk_env_fini();
+            return -1;
+        }
+
+        dev.sector_size = spdk_nvme_ns_get_sector_size(dev.ns);
+        dev.total_sectors = spdk_nvme_ns_get_num_sectors(dev.ns);
+        cout << "Bytes per sector: " << dev.sector_size << endl;
+        cout << "Total sectors: " << dev.total_sectors << endl;
+        cout << "Capacity: " << (uint64_t)dev.sector_size * dev.total_sectors / (1024 * 1024) << " MB" << endl;
+    }
+
     cout << "Hardware bridge verified, detaching and cleaning up..." << endl;
 
     // Detach all controllers before freeing the environment
-    for (auto *ctrlr : g_controllers) {
-        spdk_nvme_detach(ctrlr);
+    for (auto &dev : g_devices) {
+        spdk_nvme_detach(dev.ctrlr);
     }
 
     spdk_env_fini();
