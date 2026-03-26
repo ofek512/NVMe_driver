@@ -56,14 +56,20 @@ ssh -p 2222 -i ~/.ssh/id_ed25519 ubuntu@localhost
 
 ### 3. Kernel bypass setup (once per VM boot)
 
+Run the setup script from inside the VM:
+
 ```bash
-sudo modprobe uio_pci_generic
-sudo HUGEMEM=2048 ~/phase1_nvme/spdk/scripts/setup.sh
+~/phase1_nvme/vm_setup.sh
 ```
 
 Expected output:
 ```
-0000:00:04.0 (1b36 0010): uio_pci_generic -> uio_pci_generic
+[1/4] Loading uio_pci_generic kernel module...
+[2/4] Allocating 1024 hugepages (2GB)...
+[3/4] Mounting hugetlbfs...
+[4/4] Binding NVMe 0000:00:04.0 to uio_pci_generic...
+
+Setup complete. NVMe is bound to uio_pci_generic.
 ```
 
 ### 4. Build the driver
@@ -105,14 +111,18 @@ Finished show of proof. Detaching and cleaning up...
 When you edit code on the host and want to test:
 
 ```bash
-# 1. Copy changed files to VM
+# 1. Copy changed files to VM (from host)
 scp -P 2222 -i ~/.ssh/id_ed25519 src/main.cpp ubuntu@localhost:~/phase1_nvme/src/
+scp -P 2222 -i ~/.ssh/id_ed25519 src/Makefile ubuntu@localhost:~/phase1_nvme/src/
 
-# 2. SSH in and rebuild
+# 2. SSH in
 ssh -p 2222 -i ~/.ssh/id_ed25519 ubuntu@localhost
-cd ~/phase1_nvme/src && make clean && make
 
-# 3. Run
+# 3. First boot only: run setup
+~/phase1_nvme/vm_setup.sh
+
+# 4. Build and run
+cd ~/phase1_nvme/src && make clean && make
 sudo LD_LIBRARY_PATH=/home/ubuntu/phase1_nvme/spdk/dpdk/build/lib:/home/ubuntu/phase1_nvme/spdk/build/lib \
   ./b2b_nvme_driver
 ```
@@ -141,6 +151,21 @@ Old binary without proper detach/cleanup. Pull the latest `main.cpp` and rebuild
 
 ### `No valid drivers found [vfio-pci, uio_pci_generic, igb_uio]`
 None of the PCI passthrough kernel modules are loaded. See the `Module uio_pci_generic not found` fix above.
+
+### `EAL: No free 2048 kB hugepages reported on node 0`
+Hugepages weren't allocated. Run `vm_setup.sh` again. If it keeps failing:
+```bash
+echo 1024 | sudo tee /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages
+cat /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages  # should show 1024
+```
+
+### `Segmentation fault` during probe
+The NVMe device is still bound to the kernel driver. Run `vm_setup.sh` to rebind it.
+You can verify the current binding with:
+```bash
+ls -la /sys/bus/pci/devices/0000:00:04.0/driver
+# Should show -> .../uio_pci_generic, not .../nvme
+```
 
 ### Build fails with `undefined reference to EVP_*` or `uuid_parse`
 Missing system libraries. The Makefile's `SYS_LIBS` line should include `-lssl -lcrypto -luuid -lnuma -ldl -lpthread -lrt`.
