@@ -8,6 +8,7 @@ extern "C" {
 #include <iostream>
 #include <vector>
 #include <cstdint>
+#include <cstring>
 
 struct NvmeDevice {
     struct spdk_nvme_ctrlr *ctrlr;
@@ -32,6 +33,32 @@ void attach_cb(void *cb_ctx, const struct spdk_nvme_transport_id *trid, struct s
     NvmeDevice dev = {};
     dev.ctrlr = ctrlr;
     g_devices.push_back(dev);
+}
+
+//Callback for write
+void write_cb(void *arg, const struct spdk_nvme_cpl *completion) {
+    if (spdk_nvme_cpl_is_error(completion)) {
+        cerr << "ERROR: Write I/O failed with status code " << completion->status.sc << endl;
+    } else {
+        cout << "Write I/O completed successfully" << endl;
+    }
+
+    //cast arg to bool and set as true
+    bool *write_polling = (bool *)arg;
+    *write_polling = true;
+}
+
+//Callback for read
+void read_cb(void *arg, const struct spdk_nvme_cpl *completion) {
+    if (spdk_nvme_cpl_is_error(completion)) {
+        cerr << "ERROR: Read I/O failed with status code " << completion->status.sc << endl;
+    } else {
+        cout << "Read I/O completed successfully" << endl;
+    }
+
+    //cast arg to bool and set as true
+    bool *read_polling = (bool *)arg;
+    *read_polling = true;
 }
 
 int main() {
@@ -98,7 +125,34 @@ int main() {
         cout << "Capacity: " << (uint64_t)dev.sector_size * dev.total_sectors / (1024 * 1024) << " MB" << endl;
     }
 
-    cout << "Hardware bridge verified, detaching and cleaning up..." << endl;
+    //Writing to dma_buffer for the first NVMe device as a show of proof
+    const char *test = "Hello NVMe";
+    memcpy(g_devices[0].dma_buf, test, strlen(test));
+
+    bool write_polling = false;
+    cout << "Submitting write I/O to NVMe device..." << endl;
+    spdk_nvme_ns_cmd_write(g_devices[0].ns, g_devices[0].qpair, g_devices[0].dma_buf, 0, 1, write_cb, &write_polling, 0); // Mission D: Submit write I/O
+    // Poll for completion of the write I/O
+    while (!write_polling) {
+        spdk_nvme_qpair_process_completions(g_devices[0].qpair, 0);
+    }
+
+    //Reading the first sector back
+    // Clear the DMA buffer
+    memset(g_devices[0].dma_buf, 0, g_devices[0].sector_size);
+
+    //Submit read command
+    bool read_polling = false;
+    spdk_nvme_ns_cmd_read(g_devices[0].ns, g_devices[0].qpair, g_devices[0].dma_buf, 0, 1, read_cb, &read_polling, 0); // Mission D: Submit read I/O
+    // Poll for completion of the read I/O
+    while (!read_polling) {
+        spdk_nvme_qpair_process_completions(g_devices[0].qpair, 0);
+    }
+
+    //Data is now in the buffer, we can print it
+    cout << "Data read from NVMe: " << (char *)g_devices[0].dma_buf << endl;
+
+    cout << "Finished show of proof. Detaching and cleaning up..." << endl;
 
     // Detach all controllers before freeing the environment
     for (auto &dev : g_devices) {
