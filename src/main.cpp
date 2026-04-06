@@ -10,10 +10,11 @@ extern "C" {
 #include <cstdint>
 #include <cstring>
 
+
 struct NvmeDevice {
     struct spdk_nvme_ctrlr *ctrlr;
     struct spdk_nvme_ns    *ns;
-    struct spdk_nvme_qpair *qpair;    // Mission B: I/O queue pair
+    std::vector<struct spdk_nvme_qpair *> qpair;    // Mission B: I/O queue pair
     void                   *dma_buf;  // Mission C: DMA-safe buffer
     uint32_t                sector_size;
     uint64_t                total_sectors;
@@ -99,67 +100,85 @@ int main() {
             spdk_env_fini();
             return -1;
         }
-        cout << "Allocating I/O queue pair for NVMe operations..." << endl;
-        dev.qpair = spdk_nvme_ctrlr_alloc_io_qpair(dev.ctrlr, nullptr, 0); // Mission B: Allocate I/O queue pair
-        if (dev.qpair == nullptr) {
-            cerr << "ERROR: Failed to allocate I/O queue pair" << endl;
-            spdk_nvme_detach(dev.ctrlr);
-            spdk_env_fini();
-            return -1;
-        }
 
-        dev.sector_size = spdk_nvme_ns_get_sector_size(dev.ns);
-        dev.total_sectors = spdk_nvme_ns_get_num_sectors(dev.ns);
-        cout << "Allocating DMA-safe buffer for I/O operations..." << endl;
-        dev.dma_buf = spdk_dma_zmalloc(dev.sector_size, dev.sector_size, NULL); // Mission C: Allocate DMA-safe buffer
-        if (dev.dma_buf == nullptr) {
-            cerr << "ERROR: Failed to allocate DMA-safe buffer" << endl;
-            spdk_nvme_ctrlr_free_io_qpair(dev.qpair);
-            spdk_nvme_detach(dev.ctrlr);
-            spdk_env_fini();
-            return -1;
-        }
+        cout << "Allocating I/O queue pairs for NVMe operations..." << endl;
+        uint32_t index;
+        struct spdk_nvme_io_qpair_opts qpairopts;
+        dev.qpair.resize(spdk_env_get_last_core() + 1, nullptr);
+        SPDK_ENV_FOREACH_CORE(index) {
+            spdk_nvme_ctrlr_get_default_io_qpair_opts(dev.ctrlr, &qpairopts, sizeof(qpairopts));
+            qpairopts.io_queue_size = 128; // Set queue depth to 128
+            qpairopts.delay_cmd_submit = true; // Enable delayed command submission for better batching
+            //store in vector indexed by core ID
+            dev.qpair[index] = spdk_nvme_ctrlr_alloc_io_qpair(dev.ctrlr, &qpairopts, sizeof(qpairopts));
+            if (dev.qpair[index] == nullptr) {
+                cerr << "ERROR: Failed to allocate I/O queue pair for core " << index << endl;
+                spdk_nvme_detach(dev.ctrlr);
+                spdk_env_fini();
+                return -1;
+            }
+        }        
 
-        cout << "Bytes per sector: " << dev.sector_size << endl;
-        cout << "Total sectors: " << dev.total_sectors << endl;
-        cout << "Capacity: " << (uint64_t)dev.sector_size * dev.total_sectors / (1024 * 1024) << " MB" << endl;
+        // dev.qpair = spdk_nvme_ctrlr_alloc_io_qpair(dev.ctrlr, nullptr, 0); // Mission B: Allocate I/O queue pair
+        // if (dev.qpair == nullptr) {
+        //     cerr << "ERROR: Failed to allocate I/O queue pair" << endl;
+        //     spdk_nvme_detach(dev.ctrlr);
+        //     spdk_env_fini();
+        //     return -1;
     }
 
-    //Writing to dma_buffer for the first NVMe device as a show of proof
-    const char *test = "Hello NVMe";
-    memcpy(g_devices[0].dma_buf, test, strlen(test));
+    //     dev.sector_size = spdk_nvme_ns_get_sector_size(dev.ns);
+    //     dev.total_sectors = spdk_nvme_ns_get_num_sectors(dev.ns);
+    //     cout << "Allocating DMA-safe buffer for I/O operations..." << endl;
+    //     dev.dma_buf = spdk_dma_zmalloc(dev.sector_size, dev.sector_size, NULL); // Mission C: Allocate DMA-safe buffer
+    //     if (dev.dma_buf == nullptr) {
+    //         cerr << "ERROR: Failed to allocate DMA-safe buffer" << endl;
+    //         spdk_nvme_ctrlr_free_io_qpair(dev.qpair);
+    //         spdk_nvme_detach(dev.ctrlr);
+    //         spdk_env_fini();
+    //         return -1;
+    //     }
 
-    bool write_polling = false;
-    cout << "Submitting write I/O to NVMe device..." << endl;
-    spdk_nvme_ns_cmd_write(g_devices[0].ns, g_devices[0].qpair, g_devices[0].dma_buf, 0, 1, write_cb, &write_polling, 0); // Mission D: Submit write I/O
-    // Poll for completion of the write I/O
-    while (!write_polling) {
-        spdk_nvme_qpair_process_completions(g_devices[0].qpair, 0);
-    }
+    //     cout << "Bytes per sector: " << dev.sector_size << endl;
+    //     cout << "Total sectors: " << dev.total_sectors << endl;
+    //     cout << "Capacity: " << (uint64_t)dev.sector_size * dev.total_sectors / (1024 * 1024) << " MB" << endl;
+    // }
 
-    //Reading the first sector back
-    // Clear the DMA buffer
-    memset(g_devices[0].dma_buf, 0, g_devices[0].sector_size);
+    // //Writing to dma_buffer for the first NVMe device as a show of proof
+    // const char *test = "Hello NVMe";
+    // memcpy(g_devices[0].dma_buf, test, strlen(test));
 
-    //Submit read command
-    bool read_polling = false;
-    spdk_nvme_ns_cmd_read(g_devices[0].ns, g_devices[0].qpair, g_devices[0].dma_buf, 0, 1, read_cb, &read_polling, 0); // Mission D: Submit read I/O
-    // Poll for completion of the read I/O
-    while (!read_polling) {
-        spdk_nvme_qpair_process_completions(g_devices[0].qpair, 0);
-    }
+    // bool write_polling = false;
+    // cout << "Submitting write I/O to NVMe device..." << endl;
+    // spdk_nvme_ns_cmd_write(g_devices[0].ns, g_devices[0].qpair, g_devices[0].dma_buf, 0, 1, write_cb, &write_polling, 0); // Mission D: Submit write I/O
+    // // Poll for completion of the write I/O
+    // while (!write_polling) {
+    //     spdk_nvme_qpair_process_completions(g_devices[0].qpair, 0);
+    // }
 
-    //Data is now in the buffer, we can print it
-    cout << "Data read from NVMe: " << (char *)g_devices[0].dma_buf << endl;
+    // //Reading the first sector back
+    // // Clear the DMA buffer
+    // memset(g_devices[0].dma_buf, 0, g_devices[0].sector_size);
 
-    cout << "Finished show of proof. Detaching and cleaning up..." << endl;
+    // //Submit read command
+    // bool read_polling = false;
+    // spdk_nvme_ns_cmd_read(g_devices[0].ns, g_devices[0].qpair, g_devices[0].dma_buf, 0, 1, read_cb, &read_polling, 0); // Mission D: Submit read I/O
+    // // Poll for completion of the read I/O
+    // while (!read_polling) {
+    //     spdk_nvme_qpair_process_completions(g_devices[0].qpair, 0);
+    // }
 
-    // Detach all controllers before freeing the environment
-    for (auto &dev : g_devices) {
-        spdk_dma_free(dev.dma_buf); // Mission C: Free DMA-safe buffer
-        spdk_nvme_ctrlr_free_io_qpair(dev.qpair); // Mission B: Free I/O queue pair
-        spdk_nvme_detach(dev.ctrlr);
-    }
+    // //Data is now in the buffer, we can print it
+    // cout << "Data read from NVMe: " << (char *)g_devices[0].dma_buf << endl;
+
+    // cout << "Finished show of proof. Detaching and cleaning up..." << endl;
+
+    // // Detach all controllers before freeing the environment
+    // for (auto &dev : g_devices) {
+    //     spdk_dma_free(dev.dma_buf); // Mission C: Free DMA-safe buffer
+    //     spdk_nvme_ctrlr_free_io_qpair(dev.qpair); // Mission B: Free I/O queue pair
+    //     spdk_nvme_detach(dev.ctrlr);
+    // }
 
     spdk_env_fini();
 

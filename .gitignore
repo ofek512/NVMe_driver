@@ -12,3 +12,5 @@ spdk/
 *.a
 build/
 bin/
+
+user-data.yaml

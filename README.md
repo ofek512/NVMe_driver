@@ -24,19 +24,106 @@ No kernel I/O syscalls are used. The NVMe controller reads and writes directly t
 
 ```
 ├── boot_qemu.sh          # Launches the QEMU VM with a virtual NVMe drive
-├── user-data.yaml         # Cloud-init config (SSH key, user "ubuntu")
+├── vm_setup.sh           # Per-boot kernel bypass setup (run inside VM)
+├── user-data.yaml        # Cloud-init config (SSH key, user "ubuntu")
 ├── src/
-│   ├── main.cpp           # The driver
-│   └── Makefile           # Builds against SPDK/DPDK static libraries
-└── spdk/                  # SPDK framework (git submodule, gitignored)
+│   ├── main.cpp          # The driver
+│   └── Makefile          # Builds against SPDK/DPDK static libraries
+└── spdk/                 # SPDK + DPDK framework (git submodule, gitignored)
 ```
 
 ## Prerequisites
 
-- **Host machine:** Ubuntu with QEMU installed
-- **VM disk images:** `jammy-server-cloudimg-amd64.img`, `seed.img`, `nvme_drive.img`
-- **SSH key:** `~/.ssh/id_ed25519` (must match the key in `user-data.yaml`)
-- **SPDK built inside the VM** at `~/phase1_nvme/spdk/`
+### Host machine
+
+```bash
+sudo apt install -y qemu-system-x86 qemu-utils cloud-image-utils openssh-client
+```
+
+### Inside the VM
+
+Install these after first SSH in (covered in First-Time Setup below):
+
+```bash
+sudo apt-get update
+sudo apt-get install -y build-essential pkg-config libssl-dev libuuid-dev libnuma-dev \
+  python3 meson ninja-build python3-pyelftools linux-modules-extra-$(uname -r)
+```
+
+## First-Time Setup
+
+Do this once on a fresh clone. After this, skip straight to [How to Run](#how-to-run).
+
+### 1. Add your SSH key to user-data.yaml
+
+Open `user-data.yaml` and replace the `ssh-authorized-keys` value with your own public key:
+
+```bash
+cat ~/.ssh/id_ed25519.pub
+```
+
+If you don't have that key pair yet:
+
+```bash
+ssh-keygen -t ed25519
+```
+
+### 2. Create the VM disk images
+
+From the project root on the **host**:
+
+```bash
+# Ubuntu 22.04 cloud image (base OS)
+wget https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img
+qemu-img resize jammy-server-cloudimg-amd64.img 10G
+
+# Cloud-init seed (injects SSH key and user on first boot)
+cloud-localds seed.img user-data.yaml
+
+# Virtual NVMe backing file
+qemu-img create -f qcow2 nvme_drive.img 1G
+```
+
+### 3. Boot the VM and SSH in
+
+```bash
+# Terminal 1 — leave open
+./boot_qemu.sh
+
+# Terminal 2 — wait ~60 seconds for cloud-init to finish
+ssh -p 2222 -i ~/.ssh/id_ed25519 ubuntu@localhost
+```
+
+### 4. Copy the project into the VM
+
+From the **host** (Terminal 2 or a new one):
+
+```bash
+scp -r -P 2222 -i ~/.ssh/id_ed25519 . ubuntu@localhost:~/phase1_nvme/
+```
+
+### 5. Install VM build dependencies
+
+SSH into the VM and run:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y build-essential pkg-config libssl-dev libuuid-dev libnuma-dev \
+  python3 meson ninja-build python3-pyelftools linux-modules-extra-$(uname -r)
+```
+
+### 6. Build SPDK (and DPDK)
+
+SPDK bundles DPDK as a git submodule — there is no separate DPDK install. Both are built together:
+
+```bash
+cd ~/phase1_nvme/spdk
+git submodule update --init
+./configure
+make -j$(nproc)
+```
+
+This produces the static libraries and pkg-config files that `src/Makefile` links against, and places the DPDK shared libraries in `spdk/dpdk/build/lib/` (required at runtime via `LD_LIBRARY_PATH`).
 
 ## How to Run
 
